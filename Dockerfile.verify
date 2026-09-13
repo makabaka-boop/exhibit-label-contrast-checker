@@ -1,0 +1,10 @@
+# syntax=docker/dockerfile:1
+
+# 一次性验收服务：Vitest 单元测试 + Playwright 端到端测试（针对 web 服务）
+# 镜像内已预装与 @playwright/test@1.63.0 匹配的浏览器
+FROM mcr.microsoft.com/playwright:v1.63.0-noble
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+CMD ["npm", "run", "verify"]
