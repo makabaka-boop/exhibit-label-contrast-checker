@@ -8,6 +8,7 @@ import {
   type FormErrors,
   type VerificationResult,
 } from './lib/contrast';
+import ColorPicker from './components/ColorPicker';
 
 const PASS = '通过';
 const FAIL = '未通过';
@@ -36,6 +37,8 @@ export default function App() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [result, setResult] = useState<VerificationResult | null>(null);
   const [copied, setCopied] = useState(false);
+  // 每完成一次有效核验递增一次，取色区据此撤下“采样尚未提交”的提示。
+  const [committedNonce, setCommittedNonce] = useState(0);
 
   function clearError(field: keyof FormErrors) {
     setErrors((prev) => {
@@ -58,6 +61,13 @@ export default function App() {
     }
     setResult(verifyContrast({ foreground, background, fontSizePx, weight }));
     setCopied(false);
+    setCommittedNonce((n) => n + 1);
+  }
+
+  function handlePick(hex: string) {
+    // 页面只接收转换结果：写入背景色输入框，不触发核验。
+    setBackground(hex);
+    clearError('background');
   }
 
   async function handleCopy() {
@@ -75,107 +85,111 @@ export default function App() {
         送印前以相对亮度公式核验前景/背景配色。裁决使用未舍入对比度，等于阈值即通过；展示值四舍五入到两位。
       </p>
 
-      <form className="panel" onSubmit={handleSubmit} noValidate>
-        <div className="field">
-          <label htmlFor="foreground">前景色 (#RRGGBB)</label>
-          <input
-            id="foreground"
-            name="foreground"
-            type="text"
-            value={foreground}
-            onChange={(event) => {
-              setForeground(event.target.value);
-              clearError('foreground');
-            }}
-            aria-invalid={Boolean(errors.foreground)}
-            aria-describedby={errors.foreground ? 'foreground-error' : undefined}
-            placeholder="#000000"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {errors.foreground && (
-            <p className="error" id="foreground-error" role="alert" data-testid="error-foreground">
-              {errors.foreground}
-            </p>
-          )}
-        </div>
-
-        <div className="field">
-          <label htmlFor="background">背景色 (#RRGGBB)</label>
-          <input
-            id="background"
-            name="background"
-            type="text"
-            value={background}
-            onChange={(event) => {
-              setBackground(event.target.value);
-              clearError('background');
-            }}
-            aria-invalid={Boolean(errors.background)}
-            aria-describedby={errors.background ? 'background-error' : undefined}
-            placeholder="#FFFFFF"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {errors.background && (
-            <p className="error" id="background-error" role="alert" data-testid="error-background">
-              {errors.background}
-            </p>
-          )}
-        </div>
-
-        <div className="field">
-          <label htmlFor="font-size">字号 (CSS px)</label>
-          <input
-            id="font-size"
-            name="fontSize"
-            type="text"
-            inputMode="decimal"
-            value={fontSize}
-            onChange={(event) => {
-              setFontSize(event.target.value);
-              clearError('fontSize');
-            }}
-            aria-invalid={Boolean(errors.fontSize)}
-            aria-describedby={errors.fontSize ? 'font-size-error' : undefined}
-            placeholder="16"
-            autoComplete="off"
-          />
-          {errors.fontSize && (
-            <p className="error" id="font-size-error" role="alert" data-testid="error-font-size">
-              {errors.fontSize}
-            </p>
-          )}
-        </div>
-
-        <fieldset className="field weight">
-          <legend>字重</legend>
-          <label>
+      <div className="workspace">
+        <form className="panel" onSubmit={handleSubmit} noValidate>
+          <div className="field">
+            <label htmlFor="foreground">前景色 (#RRGGBB)</label>
             <input
-              type="radio"
-              name="weight"
-              value="normal"
-              checked={weight === 'normal'}
-              onChange={() => setWeight('normal')}
+              id="foreground"
+              name="foreground"
+              type="text"
+              value={foreground}
+              onChange={(event) => {
+                setForeground(event.target.value);
+                clearError('foreground');
+              }}
+              aria-invalid={Boolean(errors.foreground)}
+              aria-describedby={errors.foreground ? 'foreground-error' : undefined}
+              placeholder="#000000"
+              autoComplete="off"
+              spellCheck={false}
             />
-            普通
-          </label>
-          <label>
-            <input
-              type="radio"
-              name="weight"
-              value="bold"
-              checked={weight === 'bold'}
-              onChange={() => setWeight('bold')}
-            />
-            粗体
-          </label>
-        </fieldset>
+            {errors.foreground && (
+              <p className="error" id="foreground-error" role="alert" data-testid="error-foreground">
+                {errors.foreground}
+              </p>
+            )}
+          </div>
 
-        <button type="submit" className="primary">
-          核验
-        </button>
-      </form>
+          <div className="field">
+            <label htmlFor="background">背景色 (#RRGGBB)</label>
+            <input
+              id="background"
+              name="background"
+              type="text"
+              value={background}
+              onChange={(event) => {
+                setBackground(event.target.value);
+                clearError('background');
+              }}
+              aria-invalid={Boolean(errors.background)}
+              aria-describedby={errors.background ? 'background-error' : undefined}
+              placeholder="#FFFFFF"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {errors.background && (
+              <p className="error" id="background-error" role="alert" data-testid="error-background">
+                {errors.background}
+              </p>
+            )}
+          </div>
+
+          <div className="field">
+            <label htmlFor="font-size">字号 (CSS px)</label>
+            <input
+              id="font-size"
+              name="fontSize"
+              type="text"
+              inputMode="decimal"
+              value={fontSize}
+              onChange={(event) => {
+                setFontSize(event.target.value);
+                clearError('fontSize');
+              }}
+              aria-invalid={Boolean(errors.fontSize)}
+              aria-describedby={errors.fontSize ? 'font-size-error' : undefined}
+              placeholder="16"
+              autoComplete="off"
+            />
+            {errors.fontSize && (
+              <p className="error" id="font-size-error" role="alert" data-testid="error-font-size">
+                {errors.fontSize}
+              </p>
+            )}
+          </div>
+
+          <fieldset className="field weight">
+            <legend>字重</legend>
+            <label>
+              <input
+                type="radio"
+                name="weight"
+                value="normal"
+                checked={weight === 'normal'}
+                onChange={() => setWeight('normal')}
+              />
+              普通
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="weight"
+                value="bold"
+                checked={weight === 'bold'}
+                onChange={() => setWeight('bold')}
+              />
+              粗体
+            </label>
+          </fieldset>
+
+          <button type="submit" className="primary">
+            核验
+          </button>
+        </form>
+
+        <ColorPicker onPick={handlePick} committedNonce={committedNonce} />
+      </div>
 
       {result ? (
         <section className="panel result" data-testid="result-card" aria-live="polite">

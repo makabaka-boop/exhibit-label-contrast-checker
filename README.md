@@ -12,6 +12,14 @@
 - **容错**：任一字段非法时就地报错，并保留上一份有效结果。
 - **结果**：结果卡呈现原始配色、两位比值及普通/大号文字的 AA、AAA 四项结论，可复制与当前结果一致的纯文本摘要。
 
+## 从本地图片采样底色
+
+- 表单旁的取色区可选择本地展墙照片或纹理底图，图片仅以 ObjectURL 保存在本页内存中，不写入任何存储，刷新即清空。
+- 图片解码成功后按**原始像素尺寸**建立画布、等比缩放显示；点击画布里的像素，按显示坐标换算回原始像素，读取 R/G/B 通道并转成**不透明六位色值** `#RRGGBB`（忽略 alpha）。
+- 采样结果只写入背景色输入框，并提示“本次采样尚未提交”；仍需点击原有“核验”按钮才会进入校验、计算与结果卡链路，校验通过后提示自动撤下。
+- 非图片文件、图片解码失败或点击落在画布边界外时，只在取色区说明原因，不覆盖当前背景输入与上一份有效结果，重新选择合法图片后可继续操作。
+- 手工填写背景色的完整路径不受影响；通道转十六进制、缩放坐标换算均为 `src/lib/sample.ts` 中的纯函数。
+
 ## 本地开发
 
 ```bash
@@ -41,8 +49,13 @@ docker compose up --exit-code-from verify verify
 
 ```
 src/lib/contrast.ts    # 纯函数：解析、线性化、亮度、对比度、分类、裁决、摘要
-src/App.tsx            # 表单、就地报错、结果卡、复制摘要
-tests/contrast.test.ts # Vitest 单元测试
-e2e/app.spec.ts        # Playwright 端到端测试
+src/lib/sample.ts      # 纯函数：像素通道转十六进制、缩放点击坐标换算采样点
+src/components/ColorPicker.tsx # 本地图片选择与取色画布（仅 DOM/画布交互）
+src/App.tsx            # 表单、就地报错、取色区、结果卡、复制摘要
+tests/contrast.test.ts # Vitest 单元测试（对比度领域）
+tests/sample.test.ts   # Vitest 单元测试（通道转换与缩放坐标边界）
+e2e/app.spec.ts        # Playwright：合法输入、错误保留、摘要复制
+e2e/picker.spec.ts     # Playwright：上传、取色、核验主流程及失败后原值保留
+e2e/helpers/png.ts     # E2E 用最小 PNG 编码器（内存合成色块图）
 scripts/wait-for-web.mjs # verify 容器等待 web 就绪
 ```
