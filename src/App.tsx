@@ -188,7 +188,7 @@ export default function App() {
           </button>
         </form>
 
-        <ColorPicker onPick={handlePick} committedNonce={committedNonce} />
+        <ColorPicker onPick={handlePick} committedNonce={committedNonce} backgroundValue={background} />
       </div>
 
       {result ? (

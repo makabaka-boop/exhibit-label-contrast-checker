@@ -160,6 +160,93 @@ test.describe('本地图片取色核验', () => {
     await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#FFFFFF');
   });
 
+  test('点击画布最右侧装饰边框时提示不在图片区域，不采样末列颜色', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'wall.png', mimeType: 'image/png', buffer: samplePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+
+    // 合成一个落在最右侧 1px 装饰边框上的点击（元素边界内、图片内容外）
+    await canvas.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      el.dispatchEvent(
+        new MouseEvent('click', {
+          bubbles: true,
+          clientX: rect.right - 1,
+          clientY: rect.top + rect.height / 2,
+        }),
+      );
+    });
+    await expect(page.getByTestId('picker-status')).toContainText('画布边界外');
+    await expect(page.getByTestId('picker-status')).toContainText('图片区域');
+    // 未取色：背景输入保持原值，而不是末列的 #767676
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#FFFFFF');
+
+    // 边框内侧的末列像素仍可正常取色
+    const box = (await canvas.boundingBox())!;
+    await clickCell(canvas, box, 3, 1);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#767676');
+  });
+
+  test('采样后手工改动背景色，取色区提示与当前背景输入保持一致', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'wall.png', mimeType: 'image/png', buffer: samplePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+    const box = (await canvas.boundingBox())!;
+    await clickCell(canvas, box, 2, 0);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#123456');
+    await expect(page.getByTestId('picker-status')).toContainText('本次采样尚未提交');
+
+    // 手工把背景改成另一色值：取色区不得再宣称旧采样值已写入
+    await page.getByLabel('背景色 (#RRGGBB)').fill('#ABCDEF');
+    await expect(page.getByTestId('picker-status')).not.toContainText('尚未提交');
+    await expect(page.getByTestId('picker-status')).not.toContainText('#123456');
+    await expect(page.getByTestId('picker-status')).toContainText('图片已载入');
+
+    // 手工色值照常进入核验链路
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#000000');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(page.getByTestId('result-background')).toHaveText('#ABCDEF');
+  });
+
+  test('未携带类型信息的文本文件报“不是图片”，无类型但内容合法的图片仍可载入', async ({ page }) => {
+    await page.goto('/');
+
+    // 先取得一份有效结果，确认误报不会覆盖既有状态
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#000000');
+    await page.getByLabel('背景色 (#RRGGBB)').fill('#FFFFFF');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
+
+    // 无扩展名、无 MIME 类型的纯文本文件
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'notes', mimeType: '', buffer: Buffer.from('just plain text') });
+
+    await expect(page.getByTestId('picker-status')).toContainText('不是图片文件');
+    await expect(page.getByTestId('picker-status')).not.toContainText('解码失败');
+    await expect(page.getByTestId('picker-placeholder')).toBeVisible();
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#FFFFFF');
+    await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
+
+    // 内容合法但未携带类型信息的图片仍可正常载入、取色
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'wall', mimeType: '', buffer: samplePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+    const box = (await canvas.boundingBox())!;
+    await clickCell(canvas, box, 2, 0);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#123456');
+  });
+
   test('刷新不保留所选图片，手工填写背景色的路径不受影响', async ({ page }) => {
     await page.goto('/');
     await page
