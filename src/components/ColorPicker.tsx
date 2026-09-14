@@ -5,10 +5,25 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from 'react';
-import { mapDisplayPointToImagePixel, hasKnownImageSignature, rgbChannelsToHex } from '../lib/sample';
+import {
+  averageNeighborhood,
+  hasKnownImageSignature,
+  mapDisplayPointToImagePixel,
+  rgbChannelsToHex,
+  type SampleMode,
+} from '../lib/sample';
 
-const IDLE_TEXT = '选择展墙照片或纹理底图，载入后点击画布中的像素取色；采样仅写入背景用色输入框，不会自行提交。';
-const LOADED_TEXT = '图片已载入：点击画布中的像素取色，采样按图片原始尺寸换算。';
+const IDLE_TEXT: Record<SampleMode, string> = {
+  single:
+    '选择展墙照片或纹理底图，载入后点击画布中的像素取色（默认“单点”）；采样仅写入背景用色输入框，不会自行提交。',
+  average:
+    '已选择“区域平均”：载入图片后点击像素，将取其周围 3×3 邻域的算术平均色（触及边缘时只计算范围内像素），结果仅写入背景用色输入框，不会自行提交。',
+};
+const LOADED_TEXT: Record<SampleMode, string> = {
+  single: '图片已载入：点击画布中的像素取色，采样按图片原始尺寸换算。',
+  average:
+    '图片已载入（区域平均）：点击像素后取其周围 3×3 邻域的平均色，邻域触及图片边缘时只计算范围内像素。',
+};
 
 type PickerStatus =
   | { kind: 'idle' | 'info' | 'success' | 'error'; text: string };
@@ -31,8 +46,11 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const loadIdRef = useRef(0);
+  // 取色方式默认“单点”；ref 供 committedNonce 等不随模式重建的副作用读取当前值。
+  const [mode, setMode] = useState<SampleMode>('single');
+  const modeRef = useRef<SampleMode>('single');
   const [image, setImage] = useState<LoadedImage | null>(null);
-  const [status, setStatus] = useState<PickerStatus>({ kind: 'idle', text: IDLE_TEXT });
+  const [status, setStatus] = useState<PickerStatus>({ kind: 'idle', text: IDLE_TEXT.single });
   // 最近一次写入背景输入框的采样值，用于判断输入是否已被手工改动。
   const [pickedHex, setPickedHex] = useState<string | null>(null);
 
@@ -49,7 +67,7 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
   useEffect(() => {
     if (committedNonce > 0 && imageRef.current) {
       setPickedHex(null);
-      setStatus({ kind: 'info', text: LOADED_TEXT });
+      setStatus({ kind: 'info', text: LOADED_TEXT[modeRef.current] });
     }
   }, [committedNonce]);
 
@@ -70,6 +88,18 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
       ctx.drawImage(img, 0, 0);
     }
   }, [image]);
+
+  // 切换“单点 / 区域平均”：默认且随时可切回单点；不改动背景输入与已显示结果，
+  // 只在取色区说明当前方式下后续点击的含义。已有错误或“尚未提交”提示保持原样。
+  function handleModeChange(next: SampleMode) {
+    modeRef.current = next;
+    setMode(next);
+    setStatus((prev) =>
+      prev.kind === 'idle' || prev.kind === 'info'
+        ? { kind: prev.kind, text: imageRef.current ? LOADED_TEXT[next] : IDLE_TEXT[next] }
+        : prev,
+    );
+  }
 
   async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -119,7 +149,7 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
       imageRef.current = img;
       setImage({ naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
       setPickedHex(null);
-      setStatus({ kind: 'info', text: LOADED_TEXT });
+      setStatus({ kind: 'info', text: LOADED_TEXT[modeRef.current] });
       if (previous) {
         URL.revokeObjectURL(previous.src);
       }
@@ -169,6 +199,38 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
       setStatus({ kind: 'error', text: '画布不可读，未能取色；当前底色输入未改动。' });
       return;
     }
+
+    // 区域平均：一次性读取整幅像素数据交给领域函数做 3×3 平均，
+    // 画布层不自行实现任何平均/裁剪算法。
+    if (modeRef.current === 'average') {
+      let imageData: ImageData;
+      try {
+        imageData = ctx.getImageData(0, 0, image.naturalWidth, image.naturalHeight);
+      } catch {
+        // 区域读取失败：只在取色区说明原因，背景输入与已显示结果保持原样。
+        setStatus({ kind: 'error', text: '读取该区域失败，未能取色；当前底色输入未改动。' });
+        return;
+      }
+      const average = averageNeighborhood(
+        imageData.data,
+        { naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight },
+        pixel,
+      );
+      if (!average) {
+        // 有效像素为空等无法平均的情形：同样不改值。
+        setStatus({ kind: 'error', text: '区域内没有可平均的有效像素，未能取色；当前底色输入未改动。' });
+        return;
+      }
+      const hex = average.hex;
+      onPick(hex);
+      setPickedHex(hex);
+      setStatus({
+        kind: 'success',
+        text: `已按 3×3 区域平均取色 ${hex}（计入 ${average.count} 个像素）并写入背景用色输入框；本次采样尚未提交，请点击“核验”。`,
+      });
+      return;
+    }
+
     let channels: Uint8ClampedArray;
     try {
       channels = ctx.getImageData(pixel.x, pixel.y, 1, 1).data;
@@ -192,7 +254,7 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
     status.kind === 'success' &&
     pickedHex !== null &&
     backgroundValue.trim().toUpperCase() !== pickedHex
-      ? { kind: 'info', text: LOADED_TEXT }
+      ? { kind: 'info', text: LOADED_TEXT[mode] }
       : status;
 
   return (
@@ -209,6 +271,32 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
         />
       </div>
 
+      <fieldset className="field sample-mode">
+        <legend>取色方式</legend>
+        <label>
+          <input
+            type="radio"
+            name="sample-mode"
+            value="single"
+            data-testid="sample-mode-single"
+            checked={mode === 'single'}
+            onChange={() => handleModeChange('single')}
+          />
+          单点
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="sample-mode"
+            value="average"
+            data-testid="sample-mode-average"
+            checked={mode === 'average'}
+            onChange={() => handleModeChange('average')}
+          />
+          区域平均（点击像素周围 3×3）
+        </label>
+      </fieldset>
+
       {image ? (
         <canvas
           ref={canvasRef}
@@ -216,7 +304,11 @@ export default function ColorPicker({ onPick, committedNonce, backgroundValue }:
           data-testid="sample-canvas"
           onClick={handleCanvasClick}
           role="img"
-          aria-label="点击图片像素采样底色"
+          aria-label={
+            mode === 'average'
+              ? '点击图片像素采样周围 3×3 区域平均底色'
+              : '点击图片像素采样底色'
+          }
         />
       ) : (
         <div className="picker-placeholder" data-testid="picker-placeholder">

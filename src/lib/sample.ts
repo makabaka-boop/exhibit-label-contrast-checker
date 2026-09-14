@@ -1,9 +1,13 @@
 /**
  * 本地图片取色的领域逻辑（纯函数，无 DOM 依赖）。
  * 画布层只负责拿到像素通道与坐标换算所需的尺寸；这里集中负责
- * “像素通道 → 不透明六位色值”、“缩放后点击坐标 → 原始像素点”，
+ * “像素通道 → 不透明六位色值”、“缩放后点击坐标 → 原始像素点”、
+ * “中心周围 3×3 邻域 → 各通道算术平均色”，
  * 以及文件未携带类型信息时“文件头魔数 → 是否为常见图片”的兜底识别。
  */
+
+/** 取色方式：single 为单像素取色；average 为中心周围 3×3 区域平均。 */
+export type SampleMode = 'single' | 'average';
 
 /** 单个 0–255 通道转两位大写十六进制（10、15 等小于 16 的值补零）。 */
 export function channelToHex(channel: number): string {
@@ -38,6 +42,94 @@ export interface DisplayPoint {
 export interface ImagePixel {
   x: number;
   y: number;
+}
+
+/** RGBA 像素缓冲：getImageData(...).data 的结构，每像素 4 个分量，按行排列。 */
+export type PixelData = ArrayLike<number>;
+
+export interface AverageColor {
+  /** 本次平均实际计入的像素数（边缘裁剪后可能小于 9）。 */
+  count: number;
+  hex: string;
+}
+
+/**
+ * 计算中心像素周围 3×3 邻域的区域平均色。
+ * 邻域触及图片边缘时只累计落在 [0, width) × [0, height) 内的像素；
+ * 各 R/G/B 通道分别做算术平均并四舍五入（与像素数奇偶无关，Math.round 即可），
+ * 再复用 rgbChannelsToHex 转成不透明六位色值（忽略 alpha）。
+ * 缓冲为空、尺寸非法、中心越界或范围内没有任何有效像素时返回 null，
+ * 由调用方在取色区说明原因，且不改动当前背景输入与已显示结果。
+ * 画布组件不得自行实现平均算法，统一调用本函数。
+ */
+export function averageNeighborhood(
+  pixels: PixelData,
+  size: Pick<ImageSize, 'naturalWidth' | 'naturalHeight'>,
+  center: ImagePixel,
+): AverageColor | null {
+  const { naturalWidth: width, naturalHeight: height } = size;
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width <= 0 ||
+    height <= 0 ||
+    !Number.isInteger(center.x) ||
+    !Number.isInteger(center.y) ||
+    center.x < 0 ||
+    center.y < 0 ||
+    center.x >= width ||
+    center.y >= height
+  ) {
+    return null;
+  }
+  // 邻域闭区间，随后逐像素夹取到图片范围内（边缘裁剪）。
+  const left = Math.max(0, center.x - 1);
+  const right = Math.min(width - 1, center.x + 1);
+  const top = Math.max(0, center.y - 1);
+  const bottom = Math.min(height - 1, center.y + 1);
+
+  let redSum = 0;
+  let greenSum = 0;
+  let blueSum = 0;
+  let count = 0;
+  const rowBytes = width * 4;
+  for (let y = top; y <= bottom; y += 1) {
+    for (let x = left; x <= right; x += 1) {
+      const offset = y * rowBytes + x * 4;
+      const r = pixels[offset];
+      const g = pixels[offset + 1];
+      const b = pixels[offset + 2];
+      // 缓冲长度不足（读取失败的残缺数据）时该像素不计入。
+      if (
+        !Number.isInteger(r) ||
+        !Number.isInteger(g) ||
+        !Number.isInteger(b) ||
+        r < 0 ||
+        g < 0 ||
+        b < 0 ||
+        r > 255 ||
+        g > 255 ||
+        b > 255
+      ) {
+        continue;
+      }
+      redSum += r;
+      greenSum += g;
+      blueSum += b;
+      count += 1;
+    }
+  }
+  if (count === 0) {
+    return null;
+  }
+  return {
+    count,
+    hex: rgbChannelsToHex(
+      Math.round(redSum / count),
+      Math.round(greenSum / count),
+      Math.round(blueSum / count),
+    ),
+  };
 }
 
 /**

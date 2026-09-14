@@ -34,6 +34,40 @@ async function clickCell(
   });
 }
 
+// 5×5 纹理图：中心 (2,2) 邻域内除中心 #080907 外 8 像素为纯黑；
+// 左上 2×2 中 (0,0) 为 #141E28，其余三像素为纯黑（两个邻域不重叠）；
+// 邻域外一律品红，用于让越界读取或邻域尺寸错误立刻暴露。
+function texturePng(): Buffer {
+  const magenta: [number, number, number, number] = [255, 0, 255, 255];
+  const black: [number, number, number, number] = [0, 0, 0, 255];
+  return makePng(5, 5, (x, y) => {
+    if (x === 2 && y === 2) {
+      return [0x08, 0x09, 0x07, 255];
+    }
+    if (x === 0 && y === 0) {
+      return [0x14, 0x1e, 0x28, 255]; // (20,30,40)
+    }
+    const inCenterPatch = x >= 1 && x <= 3 && y >= 1 && y <= 3;
+    const inCornerPatch = x <= 1 && y <= 1;
+    return inCenterPatch || inCornerPatch ? black : magenta;
+  });
+}
+
+/** 点击 5×5 纹理图中指定像素单元的中心。 */
+async function clickTextureCell(
+  canvas: Locator,
+  box: { width: number; height: number },
+  xCell: number,
+  yCell: number,
+) {
+  await canvas.click({
+    position: {
+      x: (xCell + 0.5) * (box.width / 5),
+      y: (yCell + 0.5) * (box.height / 5),
+    },
+  });
+}
+
 test.describe('本地图片取色核验', () => {
   test('上传图片 → 点击像素取色写入背景框（提示尚未提交）→ 核验进入结果链路', async ({ page }) => {
     await page.goto('/');
@@ -266,6 +300,127 @@ test.describe('本地图片取色核验', () => {
     await page.getByRole('button', { name: '核验' }).click();
     await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
     await expect(page.getByTestId('result-background')).toHaveText('#FFFFFF');
+  });
+  test('取色方式默认“单点”：载入图片后取到点击处原像素颜色', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'texture.png', mimeType: 'image/png', buffer: texturePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+
+    // 默认档位为单点，且取色区文案仍是单像素口径
+    await expect(page.getByTestId('sample-mode-single')).toBeChecked();
+    await expect(page.getByTestId('sample-mode-average')).not.toBeChecked();
+    await expect(page.getByTestId('picker-status')).toContainText('点击画布中的像素取色');
+
+    // 点击中心特殊像素：单点路径直接得到原像素 #080907，而不是邻域平均色
+    const box = (await canvas.boundingBox())!;
+    await clickTextureCell(canvas, box, 2, 2);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#080907');
+    await expect(page.getByTestId('picker-status')).not.toContainText('区域平均');
+
+    // 切到区域平均再切回单点后，行为仍是单像素取色
+    await page.getByTestId('sample-mode-average').check();
+    await page.getByTestId('sample-mode-single').check();
+    await clickTextureCell(canvas, box, 0, 0);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#141E28');
+  });
+
+  test('区域平均：载入纹理图 → 切换 → 点击取 3×3 平均色 → 提交核验走原有链路', async ({ page }) => {
+    await page.goto('/');
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'texture.png', mimeType: 'image/png', buffer: texturePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+
+    // 切到区域平均后，取色区文案说明 3×3 口径
+    await page.getByTestId('sample-mode-average').check();
+    await expect(page.getByTestId('sample-mode-single')).not.toBeChecked();
+    await expect(page.getByTestId('picker-status')).toContainText('3×3');
+
+    // 点击中心 (2,2)：#080907 + 8 个纯黑 → 平均 (1,1,1) = #010101（通道分别四舍五入）
+    const box = (await canvas.boundingBox())!;
+    await clickTextureCell(canvas, box, 2, 2);
+    const background = page.getByLabel('背景色 (#RRGGBB)');
+    await expect(background).toHaveValue('#010101');
+    await expect(page.getByTestId('picker-status')).toContainText('3×3 区域平均');
+    await expect(page.getByTestId('picker-status')).toContainText('计入 9 个像素');
+    await expect(page.getByTestId('picker-status')).toContainText('本次采样尚未提交');
+
+    // 沿用原有核验按钮进入既有计算链路
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#FFFFFF');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(page.getByTestId('result-card')).toBeVisible();
+    await expect(page.getByTestId('result-background')).toHaveText('#010101');
+    await expect(page.getByTestId('result-foreground')).toHaveText('#FFFFFF');
+    // 白对近黑的 #010101，对比度约 20.87，四项全部通过
+    await expect(page.getByTestId('ratio-value')).toHaveText('20.87');
+    await expect(page.getByTestId('verdict-normal-aaa')).toHaveText('通过');
+    await expect(page.getByTestId('picker-status')).not.toContainText('尚未提交');
+
+    // 边缘裁剪：点击左上角 (0,0)，邻域只有 2×2 范围
+    const box2 = (await canvas.boundingBox())!;
+    await clickTextureCell(canvas, box2, 0, 0);
+    // #141E28(20,30,40) 与三个纯黑的 2×2 平均：5、8、10 → #05080A，计入 4 个像素
+    await expect(background).toHaveValue('#05080A');
+    await expect(page.getByTestId('picker-status')).toContainText('计入 4 个像素');
+  });
+
+  test('区域读取失败时取色区说明原因，背景输入与已显示结果保持原样', async ({ page }) => {
+    await page.goto('/');
+
+    // 先取得一份有效结果，确认读取失败不影响已显示结果
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#000000');
+    await page.getByLabel('背景色 (#RRGGBB)').fill('#FFFFFF');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
+
+    await page
+      .getByTestId('image-file')
+      .setInputFiles({ name: 'texture.png', mimeType: 'image/png', buffer: texturePng() });
+    const canvas = page.getByTestId('sample-canvas');
+    await expect(canvas).toBeVisible();
+    await page.getByTestId('sample-mode-average').check();
+
+    // 模拟区域读取抛错（与跨域画布安全错误同型），通过开关控制便于模拟“恢复读取”
+    await canvas.evaluate((el) => {
+      const context = (el as HTMLCanvasElement).getContext('2d')!;
+      const original = context.getImageData.bind(context);
+      (context as unknown as { __readFail?: boolean }).__readFail = true;
+      context.getImageData = ((...args: Parameters<CanvasRenderingContext2D['getImageData']>) => {
+        if ((context as unknown as { __readFail?: boolean }).__readFail) {
+          throw new DOMException('The canvas has been tainted', 'SecurityError');
+        }
+        return original(...args);
+      }) as CanvasRenderingContext2D['getImageData'];
+    });
+    const box = (await canvas.boundingBox())!;
+    await clickTextureCell(canvas, box, 2, 2);
+
+    await expect(page.getByTestId('picker-status')).toContainText('读取该区域失败');
+    await expect(page.getByTestId('picker-status')).toContainText('未改动');
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#FFFFFF');
+    await expect(page.getByTestId('result-background')).toHaveText('#FFFFFF');
+    await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
+
+    // 恢复读取后无需重新载入图片，即可继续按区域平均取色
+    await canvas.evaluate((el) => {
+      const context = (el as HTMLCanvasElement).getContext('2d')!;
+      (context as unknown as { __readFail?: boolean }).__readFail = false;
+    });
+    await clickTextureCell(canvas, box, 2, 2);
+    await expect(page.getByLabel('背景色 (#RRGGBB)')).toHaveValue('#010101');
+    await expect(page.getByTestId('picker-status')).toContainText('计入 9 个像素');
+    await expect(page.getByTestId('ratio-value')).toHaveText('21.00');
+
+    // 刷新后图片不保留、档位约定复位为默认单点
+    await page.reload();
+    await expect(page.getByTestId('picker-placeholder')).toBeVisible();
+    await expect(page.getByTestId('sample-mode-single')).toBeChecked();
   });
 });
 

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  averageNeighborhood,
   channelToHex,
   hasKnownImageSignature,
   mapDisplayPointToImagePixel,
   rgbChannelsToHex,
+  type PixelData,
 } from '../src/lib/sample';
 
 describe('channelToHex：0–255 通道转两位大写十六进制', () => {
@@ -125,6 +127,115 @@ describe('mapDisplayPointToImagePixel：缩放坐标换算', () => {
         displayWidth: Number.NaN,
         displayHeight: 100,
       }),
+    ).toBeNull();
+  });
+});
+
+describe('averageNeighborhood：中心周围 3×3 区域平均', () => {
+  /** 按 (x, y) → RGBA 的上色函数铺出整块 RGBA 像素数据（每像素 4 分量，按行排列）。 */
+  function buildPixels(
+    width: number,
+    height: number,
+    paint: (x: number, y: number) => readonly [number, number, number, number],
+  ): PixelData {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const [r, g, b, a] = paint(x, y);
+        const offset = (y * width + x) * 4;
+        data[offset] = r;
+        data[offset + 1] = g;
+        data[offset + 2] = b;
+        data[offset + 3] = a;
+      }
+    }
+    return data;
+  }
+
+  const size = { naturalWidth: 5, naturalHeight: 5 };
+
+  it('中心区域：完整计入 9 个像素，各通道算术平均并四舍五入', () => {
+    // 中心 (2,2) 的 3×3 邻域：除中心为 (10,10,0) 外，其余 8 像素均为 (9,8,1)
+    const pixels = buildPixels(5, 5, (x, y) =>
+      x === 2 && y === 2 ? [10, 10, 0, 255] : [9, 8, 1, 255],
+    );
+    // R: (9*8+10)/9 = 9.111… → 9；G: (8*8+10)/9 = 8.222… → 8；B: (1*8+0)/9 = 0.888… → 1
+    const result = averageNeighborhood(pixels, size, { x: 2, y: 2 });
+    expect(result).not.toBeNull();
+    expect(result!.count).toBe(9);
+    expect(result!.hex).toBe('#090801');
+  });
+
+  it('中心区域：忽略 alpha，恒色区域平均后仍是该六位色值', () => {
+    // 邻域内 alpha 五花八门，平均色只看 R/G/B
+    const pixels = buildPixels(5, 5, (x, y) => [0x12, 0x34, 0x56, ((x * 5 + y) * 7) % 256]);
+    const result = averageNeighborhood(pixels, size, { x: 2, y: 2 });
+    expect(result!.count).toBe(9);
+    expect(result!.hex).toBe('#123456');
+  });
+
+  it('边缘裁剪：左上角 (0,0) 只计范围内 4 个像素，不越界读取', () => {
+    // 2×2 范围内：三个 (10,20,30)、一个 (20,30,40)
+    const pixels = buildPixels(5, 5, (x, y) =>
+      x <= 1 && y <= 1 && !(x === 1 && y === 1)
+        ? [10, 20, 30, 255]
+        : x === 1 && y === 1
+          ? [20, 30, 40, 255]
+          : [200, 200, 200, 255],
+    );
+    const result = averageNeighborhood(pixels, size, { x: 0, y: 0 });
+    expect(result!.count).toBe(4);
+    // R: (10*3+20)/4 = 12.5 → 13；G: 22.5 → 23；B: 32.5 → 33
+    expect(result!.hex).toBe('#0D1721');
+  });
+
+  it('边缘裁剪：贴边但不在角上时计入 6 个像素；右下角同理', () => {
+    // 顶边中心 (2,0)：两行 × 三列 = 6 个像素，上行两行值为 0 / 60
+    const pixels = buildPixels(5, 5, (_x, y) => (y === 0 ? [0, 0, 0, 255] : [60, 60, 60, 255]));
+    const top = averageNeighborhood(pixels, size, { x: 2, y: 0 });
+    expect(top!.count).toBe(6);
+    // 上排 3 个 0、下排 3 个 60 → 30
+    expect(top!.hex).toBe('#1E1E1E');
+
+    const bottomRight = averageNeighborhood(pixels, size, { x: 4, y: 4 });
+    expect(bottomRight!.count).toBe(4);
+    // 邻域两行（y=3、4）全是 60 → 60
+    expect(bottomRight!.hex).toBe('#3C3C3C');
+  });
+
+  it('通道舍入：半值一律进位（四舍五入），各通道独立舍入', () => {
+    // 构造 2×2 邻域（左上角），两像素两通道凑出 .5
+    const pixels = buildPixels(2, 2, (x, y) =>
+      x === 0 && y === 0 ? [10, 21, 30, 255] : [11, 22, 31, 255],
+    );
+    const result = averageNeighborhood(pixels, { naturalWidth: 2, naturalHeight: 2 }, { x: 0, y: 0 });
+    expect(result!.count).toBe(4);
+    // (10+11+11+11)/4 = 10.75 → 11；G: (21+22*3)/4 = 21.75 → 22；B: (30+31*3)/4 = 30.75 → 31
+    expect(result!.hex).toBe('#0B161F');
+
+    // 真正的 .5：两像素邻域 [10,10] → 5、[1,1] → 1 时另一通道 [0,1] → 0.5 → 1
+    const half = buildPixels(2, 1, (x) => (x === 0 ? [10, 0, 254, 255] : [11, 1, 255, 255]));
+    const halfResult = averageNeighborhood(half, { naturalWidth: 2, naturalHeight: 1 }, { x: 0, y: 0 });
+    expect(halfResult!.count).toBe(2);
+    expect(halfResult!.hex).toBe('#0B01FF'); // R 10.5 → 11，G 0.5 → 1，B 254.5 → 255
+  });
+
+  it('有效像素为空或参数非法时返回 null（由调用方提示且不改值）', () => {
+    // 空缓冲 + 合法中心：邻域内没有任何完整像素
+    expect(averageNeighborhood([], size, { x: 2, y: 2 })).toBeNull();
+    expect(averageNeighborhood(new Uint8ClampedArray(0), size, { x: 0, y: 0 })).toBeNull();
+    // 缓冲长度不足以容纳中心像素
+    expect(averageNeighborhood([0, 0, 0, 0], size, { x: 2, y: 2 })).toBeNull();
+    // 中心越界 / 非整数
+    expect(averageNeighborhood(buildPixels(5, 5, () => [1, 2, 3, 255]), size, { x: -1, y: 0 })).toBeNull();
+    expect(averageNeighborhood(buildPixels(5, 5, () => [1, 2, 3, 255]), size, { x: 5, y: 0 })).toBeNull();
+    expect(averageNeighborhood(buildPixels(5, 5, () => [1, 2, 3, 255]), size, { x: 1.5, y: 0 })).toBeNull();
+    // 尺寸非法
+    expect(
+      averageNeighborhood(buildPixels(5, 5, () => [1, 2, 3, 255]), { naturalWidth: 0, naturalHeight: 5 }, { x: 0, y: 0 }),
+    ).toBeNull();
+    expect(
+      averageNeighborhood(buildPixels(5, 5, () => [1, 2, 3, 255]), { naturalWidth: -5, naturalHeight: 5 }, { x: 0, y: 0 }),
     ).toBeNull();
   });
 });
