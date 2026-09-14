@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  blendChannels,
   buildPlainTextSummary,
   contrastRatio,
   evaluateContrast,
@@ -7,6 +8,7 @@ import {
   isLargeText,
   parseHexColor,
   relativeLuminance,
+  rgbColorToHex,
   srgbChannelToLinear,
   validateInputs,
   verifyContrast,
@@ -242,5 +244,180 @@ describe('buildPlainTextSummary：摘要与结果一致', () => {
     expect(summary).toContain('普通文字 AA: 未通过');
     expect(summary).toContain('大号文字 AA: 通过');
     expect(summary).toContain('大号文字 AAA: 未通过');
+  });
+});
+
+describe('validateInputs：半透明覆盖率校验', () => {
+  const base = { foreground: '#000000', background: '#FFFFFF', fontSize: '16' };
+
+  it('合法覆盖率解析为百分数（0, 100]，允许首尾空格与小数', () => {
+    for (const [raw, expected] of [
+      ['50', 50],
+      ['0.5', 0.5],
+      ['.5', 0.5],
+      ['100', 100],
+      [' 25 ', 25],
+      ['33.3', 33.3],
+    ] as const) {
+      const { errors, coveragePercent } = validateInputs({ ...base, inkMode: 'translucent', coverage: raw });
+      expect(errors, JSON.stringify(raw)).toEqual({});
+      expect(coveragePercent, JSON.stringify(raw)).toBe(expected);
+    }
+  });
+
+  it('为空、含单位、超界或非有限数时分别给出原因，且不产出覆盖率', () => {
+    const cases: Array<[string, RegExp]> = [
+      ['', /填写覆盖率/],
+      ['   ', /填写覆盖率/],
+      ['50%', /纯数字/],
+      ['50％', /纯数字/],
+      ['50 percent', /纯数字/],
+      ['abc', /纯数字/],
+      ['1e2', /纯数字/],
+      ['0x32', /纯数字/],
+      ['Infinity', /纯数字/],
+      ['NaN', /纯数字/],
+      ['0', /大于 0 且不超过 100/],
+      ['-5', /纯数字/],
+      ['100.01', /大于 0 且不超过 100/],
+      ['101', /大于 0 且不超过 100/],
+    ];
+    for (const [raw, reason] of cases) {
+      const { errors, coveragePercent } = validateInputs({ ...base, inkMode: 'translucent', coverage: raw });
+      expect(errors.coverage, JSON.stringify(raw)).toMatch(reason);
+      expect(coveragePercent, JSON.stringify(raw)).toBeNull();
+    }
+  });
+
+  it('覆盖率错误与其他字段错误互不影响', () => {
+    const { errors, fontSizePx, coveragePercent } = validateInputs({
+      foreground: 'red',
+      background: '#FFFFFF',
+      fontSize: '16',
+      inkMode: 'translucent',
+      coverage: '0',
+    });
+    expect(errors.foreground).toBeTruthy();
+    expect(errors.coverage).toBeTruthy();
+    expect(errors.fontSize).toBeUndefined();
+    expect(fontSizePx).toBe(16);
+    expect(coveragePercent).toBeNull();
+  });
+
+  it('不透明（默认）路径不校验覆盖率，结果与不传一致', () => {
+    const implicit = validateInputs(base);
+    expect(implicit.errors).toEqual({});
+    expect(implicit.coveragePercent).toBeNull();
+
+    // 不透明时即使覆盖率字段残留内容也不参与校验
+    const explicit = validateInputs({ ...base, inkMode: 'opaque', coverage: '50%' });
+    expect(explicit.errors).toEqual({});
+    expect(explicit.coveragePercent).toBeNull();
+  });
+});
+
+describe('blendChannels：逐通道“前景×覆盖率 + 背景×剩余比例”', () => {
+  it('黑字 50% 覆盖率落在白底上混合为中灰 #808080（127.5 四舍五入为 128）', () => {
+    const blended = blendChannels({ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 }, 0.5);
+    expect(blended).toEqual({ r: 128, g: 128, b: 128 });
+    expect(rgbColorToHex(blended)).toBe('#808080');
+  });
+
+  it('各通道独立混合并分别四舍五入', () => {
+    // r: 0×0.3 + 255×0.7 = 178.5 → 179；g: 100×0.3 + 200×0.7 = 170；b: 255×0.3 + 0×0.7 = 76.5 → 77
+    const blended = blendChannels({ r: 0, g: 100, b: 255 }, { r: 255, g: 200, b: 0 }, 0.3);
+    expect(blended).toEqual({ r: 179, g: 170, b: 77 });
+    expect(rgbColorToHex(blended)).toBe('#B3AA4D');
+  });
+
+  it('覆盖率 1 时结果与前景逐通道相等（与原不透明算法等价）', () => {
+    const fg = { r: 18, g: 52, b: 86 };
+    expect(blendChannels(fg, { r: 255, g: 255, b: 255 }, 1)).toEqual(fg);
+    expect(blendChannels(fg, { r: 0, g: 0, b: 0 }, 1)).toEqual(fg);
+  });
+});
+
+describe('verifyContrast：半透明着色进入既有裁决链路', () => {
+  it('结果对象同时保留标称前景色、覆盖率与有效前景色', () => {
+    const r = verifyContrast({
+      foreground: '#000000',
+      background: '#FFFFFF',
+      fontSizePx: 16,
+      weight: 'normal',
+      coveragePercent: 50,
+    });
+    expect(r.foreground).toBe('#000000');
+    expect(r.coveragePercent).toBe(50);
+    expect(r.effectiveForeground).toBe('#808080');
+    // 有效前景 #808080 对白 ≈ 3.949：普通 AA 未通过、大号 AA 通过、大号 AAA 未通过
+    expect(r.ratio).toBeCloseTo(3.949, 2);
+    expect(r.verdicts).toEqual({
+      normalAA: false,
+      normalAAA: false,
+      largeAA: true,
+      largeAAA: false,
+    });
+  });
+
+  it('覆盖率 100% 时与不透明路径完全等价', () => {
+    const opaque = verifyContrast({
+      foreground: '#123456',
+      background: '#ABCDEF',
+      fontSizePx: 20,
+      weight: 'bold',
+    });
+    const full = verifyContrast({
+      foreground: '#123456',
+      background: '#ABCDEF',
+      fontSizePx: 20,
+      weight: 'bold',
+      coveragePercent: 100,
+    });
+    expect(full.ratio).toBe(opaque.ratio);
+    expect(full.effectiveForeground).toBe('#123456');
+    expect(full.verdicts).toEqual(opaque.verdicts);
+    expect(full.isLargeText).toBe(opaque.isLargeText);
+  });
+
+  it('不传覆盖率（不透明）时有效前景色与标称前景色一致', () => {
+    const r = verifyContrast({ foreground: '#1a2B3c', background: '#FFFFFF', fontSizePx: 16, weight: 'normal' });
+    expect(r.coveragePercent).toBeNull();
+    expect(r.effectiveForeground).toBe('#1a2B3c');
+  });
+
+  it('覆盖率越界或非有限数时抛错（调用方须先校验）', () => {
+    for (const coveragePercent of [0, -1, 100.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        verifyContrast({ foreground: '#000000', background: '#FFFFFF', fontSizePx: 16, weight: 'normal', coveragePercent }),
+      ).toThrow();
+    }
+  });
+});
+
+describe('buildPlainTextSummary：半透明摘要呈现计算依据', () => {
+  it('包含着色方式、标称前景色与有效前景色，其余行与不透明一致', () => {
+    const r = verifyContrast({
+      foreground: '#000000',
+      background: '#FFFFFF',
+      fontSizePx: 16,
+      weight: 'normal',
+      coveragePercent: 50,
+    });
+    expect(buildPlainTextSummary(r)).toBe(
+      [
+        '着色方式: 半透明（覆盖率 50%）',
+        '标称前景色: #000000',
+        '有效前景色: #808080',
+        '背景色: #FFFFFF',
+        '字号: 16px',
+        '字重: 普通',
+        '文字分类: 普通文字',
+        '对比度: 3.95',
+        '普通文字 AA: 未通过',
+        '普通文字 AAA: 未通过',
+        '大号文字 AA: 通过',
+        '大号文字 AAA: 未通过',
+      ].join('\n'),
+    );
   });
 });

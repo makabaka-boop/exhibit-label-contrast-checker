@@ -6,6 +6,7 @@ import {
   verifyContrast,
   type FontWeight,
   type FormErrors,
+  type TextInkMode,
   type VerificationResult,
 } from './lib/contrast';
 import ColorPicker from './components/ColorPicker';
@@ -34,6 +35,9 @@ export default function App() {
   const [background, setBackground] = useState('#FFFFFF');
   const [fontSize, setFontSize] = useState('16');
   const [weight, setWeight] = useState<FontWeight>('normal');
+  // 文字着色方式默认不透明；覆盖率仅在选半透明时显示并参与校验。
+  const [inkMode, setInkMode] = useState<TextInkMode>('opaque');
+  const [coverage, setCoverage] = useState('');
   const [errors, setErrors] = useState<FormErrors>({});
   const [result, setResult] = useState<VerificationResult | null>(null);
   const [copied, setCopied] = useState(false);
@@ -53,13 +57,19 @@ export default function App() {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const { errors: nextErrors, fontSizePx } = validateInputs({ foreground, background, fontSize });
+    const { errors: nextErrors, fontSizePx, coveragePercent } = validateInputs({
+      foreground,
+      background,
+      fontSize,
+      inkMode,
+      coverage,
+    });
     setErrors(nextErrors);
     if (fontSizePx === null || Object.keys(nextErrors).length > 0) {
       // 任一字段非法：就地报错，保留上一份有效结果
       return;
     }
-    setResult(verifyContrast({ foreground, background, fontSizePx, weight }));
+    setResult(verifyContrast({ foreground, background, fontSizePx, weight, coveragePercent }));
     setCopied(false);
     setCommittedNonce((n) => n + 1);
   }
@@ -110,6 +120,62 @@ export default function App() {
               </p>
             )}
           </div>
+
+          <fieldset className="field ink-mode">
+            <legend>文字着色方式</legend>
+            <label>
+              <input
+                type="radio"
+                name="ink-mode"
+                value="opaque"
+                data-testid="ink-mode-opaque"
+                checked={inkMode === 'opaque'}
+                onChange={() => {
+                  setInkMode('opaque');
+                  // 切回不透明后覆盖率输入隐藏，其错误一并撤下。
+                  clearError('coverage');
+                }}
+              />
+              不透明
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="ink-mode"
+                value="translucent"
+                data-testid="ink-mode-translucent"
+                checked={inkMode === 'translucent'}
+                onChange={() => setInkMode('translucent')}
+              />
+              半透明
+            </label>
+          </fieldset>
+
+          {inkMode === 'translucent' && (
+            <div className="field">
+              <label htmlFor="coverage">覆盖率（%，大于 0 且不超过 100）</label>
+              <input
+                id="coverage"
+                name="coverage"
+                type="text"
+                inputMode="decimal"
+                value={coverage}
+                onChange={(event) => {
+                  setCoverage(event.target.value);
+                  clearError('coverage');
+                }}
+                aria-invalid={Boolean(errors.coverage)}
+                aria-describedby={errors.coverage ? 'coverage-error' : undefined}
+                placeholder="50"
+                autoComplete="off"
+              />
+              {errors.coverage && (
+                <p className="error" id="coverage-error" role="alert" data-testid="error-coverage">
+                  {errors.coverage}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="field">
             <label htmlFor="background">背景色 (#RRGGBB)</label>
@@ -198,7 +264,7 @@ export default function App() {
             className="preview"
             data-testid="preview"
             style={{
-              color: result.foreground,
+              color: result.effectiveForeground,
               backgroundColor: result.background,
               fontSize: `${result.fontSizePx}px`,
               fontWeight: result.weight === 'bold' ? 700 : 400,
@@ -207,10 +273,27 @@ export default function App() {
             博物馆展签示例 Aa 123
           </div>
           <dl className="facts">
-            <div>
-              <dt>前景色</dt>
-              <dd data-testid="result-foreground">{result.foreground}</dd>
-            </div>
+            {result.coveragePercent !== null ? (
+              <>
+                <div>
+                  <dt>着色方式</dt>
+                  <dd data-testid="result-ink">半透明（覆盖率 {result.coveragePercent}%）</dd>
+                </div>
+                <div>
+                  <dt>标称前景色</dt>
+                  <dd data-testid="result-foreground">{result.foreground}</dd>
+                </div>
+                <div>
+                  <dt>有效前景色</dt>
+                  <dd data-testid="result-effective-foreground">{result.effectiveForeground}</dd>
+                </div>
+              </>
+            ) : (
+              <div>
+                <dt>前景色</dt>
+                <dd data-testid="result-foreground">{result.foreground}</dd>
+              </div>
+            )}
             <div>
               <dt>背景色</dt>
               <dd data-testid="result-background">{result.background}</dd>

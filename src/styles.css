@@ -143,13 +143,15 @@ h1 {
   outline: 2px solid rgba(179, 38, 30, 0.25);
 }
 
-.weight {
+.weight,
+.ink-mode {
   border: none;
   padding: 0;
   margin: 0 0 1rem;
 }
 
-.weight label {
+.weight label,
+.ink-mode label {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
