@@ -224,4 +224,48 @@ test.describe('行长预检工作台', () => {
     const stored = await page.evaluate((key) => localStorage.getItem(key), PRECHECK_STORAGE_KEY);
     expect(stored).toBeNull();
   });
+
+  test('画布可创建但测量报错时展示测量失败，旧记录与存储不被改写', async ({ page }) => {
+    // 先完成一次合法预检，留下有效记录
+    await page.goto('/precheck.html');
+    await runValidPrecheck(page);
+    await expect(page.getByTestId('record-verdict')).toHaveText('未超出行数');
+
+    // 让画布可创建、但 measureText 抛错（开关可控，便于模拟“测量恢复”）
+    await page.evaluate(() => {
+      const original = CanvasRenderingContext2D.prototype.measureText;
+      (window as unknown as { __measureFail: boolean }).__measureFail = true;
+      CanvasRenderingContext2D.prototype.measureText = function (
+        this: CanvasRenderingContext2D,
+        text: string,
+      ): TextMetrics {
+        if ((window as unknown as { __measureFail: boolean }).__measureFail) {
+          throw new DOMException('The canvas is no longer usable', 'InvalidStateError');
+        }
+        return original.call(this, text);
+      };
+    });
+
+    // 编辑后重新提交：测量中途报错 → 展示测量失败，不中断、不写入存储
+    await page.getByTestId('precheck-title').fill('aaaa bbbb cccc');
+    await page.getByTestId('precheck-submit').click();
+    await expect(page.getByTestId('measure-failure')).toBeVisible();
+    await expect(page.getByTestId('precheck-result')).toHaveCount(0);
+
+    // 最近一次有效记录原样保留，存储中的旧记录未被改写
+    await expect(page.getByTestId('record-card')).toBeVisible();
+    await expect(page.getByTestId('record-title')).toHaveText('aaaa bbbb');
+    await expect(page.getByTestId('record-verdict')).toHaveText('未超出行数');
+    const stored = await page.evaluate((key) => localStorage.getItem(key), PRECHECK_STORAGE_KEY);
+    expect(JSON.parse(stored!).draft.title).toBe('aaaa bbbb');
+
+    // 测量恢复后无需刷新即可继续预检，记录随之更新
+    await page.evaluate(() => {
+      (window as unknown as { __measureFail: boolean }).__measureFail = false;
+    });
+    await page.getByTestId('precheck-submit').click();
+    await expect(page.getByTestId('measure-failure')).toHaveCount(0);
+    await expect(page.getByTestId('precheck-result')).toBeVisible();
+    await expect(page.getByTestId('record-title')).toHaveText('aaaa bbbb cccc');
+  });
 });

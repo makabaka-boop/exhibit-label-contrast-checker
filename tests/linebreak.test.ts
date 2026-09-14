@@ -134,6 +134,36 @@ describe('超长连续文本：按 Unicode 字符切分', () => {
   });
 });
 
+describe('适配器测量报错：领域服务不吞错、向上抛出', () => {
+  it('measure 抛错时 layoutLines 原样向上抛出（由调用方决定如何提示）', () => {
+    const failing: TextWidthAdapter = {
+      measure: () => {
+        throw new Error('measure failed');
+      },
+    };
+    expect(() =>
+      layoutLines({ text: 'aa bb', maxWidthPx: 50, maxLines: 2 }, failing),
+    ).toThrow('measure failed');
+  });
+
+  it('排版中途报错同样向上抛出，不产出半截结果', () => {
+    // 前两次测量正常，第三次开始抛错（模拟测量中途画布失效）
+    let calls = 0;
+    const flaky: TextWidthAdapter = {
+      measure: (text) => {
+        calls += 1;
+        if (calls > 2) {
+          throw new Error('context lost');
+        }
+        return Array.from(text).length * 10;
+      },
+    };
+    expect(() =>
+      layoutLines({ text: 'aa bb cc dd', maxWidthPx: 50, maxLines: 5 }, flaky),
+    ).toThrow('context lost');
+  });
+});
+
 describe('行数结论与最长行宽', () => {
   it('行数超过上限时 exceedsMaxLines 为 true，等于上限不算超', () => {
     const adapter = fixedWidth();

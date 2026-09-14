@@ -86,6 +86,13 @@ export default function PrecheckApp() {
     setMeasureFailed(false);
   }
 
+  function showMeasureFailure() {
+    // 测量失败（Canvas 不可用或测量过程报错）：清空当前结论，不写入存储，
+    // 最近一次有效记录保持不变。
+    setMeasured(null);
+    setMeasureFailed(true);
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const { errors: nextErrors, value } = validatePrecheckDraft(draft);
@@ -96,15 +103,21 @@ export default function PrecheckApp() {
     }
     const adapter = createCanvasTextWidthAdapter(value.fontSizePx, draft.weight);
     if (!adapter) {
-      // Canvas 不可用：展示测量失败，不写入存储，最近一次有效记录保持不变。
-      setMeasured(null);
-      setMeasureFailed(true);
+      showMeasureFailure();
       return;
     }
-    const result = layoutLines(
-      { text: value.text, maxWidthPx: value.maxWidthPx, maxLines: value.maxLines },
-      adapter,
-    );
+    let result: LayoutResult;
+    try {
+      result = layoutLines(
+        { text: value.text, maxWidthPx: value.maxWidthPx, maxLines: value.maxLines },
+        adapter,
+      );
+    } catch {
+      // 画布能创建但实际测量报错（如上下文丢失）：领域服务向上抛错，
+      // 这里同样按测量失败处理，不写入存储。
+      showMeasureFailure();
+      return;
+    }
     const snapshot: PrecheckDraftSnapshot = { ...draft };
     setMeasured({
       draft: snapshot,
@@ -321,7 +334,7 @@ export default function PrecheckApp() {
         </section>
       ) : measureFailed ? (
         <p className="error panel-error" data-testid="measure-failure" role="alert">
-          测量失败：当前浏览器无法创建 Canvas 测量上下文，未执行排版，也未写入任何记录。
+          测量失败：当前浏览器无法完成 Canvas 文本测量，未生成结论，也未写入任何记录。
         </p>
       ) : (
         <p className="empty" data-testid="precheck-pending">
