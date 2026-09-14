@@ -356,6 +356,39 @@ describe('blendChannels：逐通道“前景×覆盖率 + 背景×剩余比例�
     expect(r.effectiveForeground).toBe('#202020');
   });
 
+  it('高精度覆盖率下的 .5 边界：黑字在一级深灰（#010101）墙上不被 ULP 容差错误提亮', () => {
+    // 混合值 = 1 × 剩余比例。回归：固定 1e-9 绝对容差会把真实低于 .5 的值
+    // 顶过边界而错误上舍（提亮一档）；ULP 相对容差只吸收浮点误差。
+    const wall = { r: 1, g: 1, b: 1 };
+    // 50.00000001% → 剩余 0.4999999999 < .5，应舍为 0
+    expect(blendChannels({ r: 0, g: 0, b: 0 }, wall, 0.5000000001)).toEqual({ r: 0, g: 0, b: 0 });
+    // 49.999999999% → 剩余 0.50000000001 > .5，应上舍为 1
+    expect(blendChannels({ r: 0, g: 0, b: 0 }, wall, 0.49999999999)).toEqual({ r: 1, g: 1, b: 1 });
+    // 恰 50% → .5 恒向上取 1
+    expect(blendChannels({ r: 0, g: 0, b: 0 }, wall, 0.5)).toEqual({ r: 1, g: 1, b: 1 });
+    expect(rgbColorToHex(blendChannels({ r: 0, g: 0, b: 0 }, wall, 0.5000000001))).toBe('#000000');
+  });
+
+  it('高精度覆盖率经 validateInputs → verifyContrast 链路仍不错误提亮', () => {
+    const { errors, coveragePercent } = validateInputs({
+      foreground: '#000000',
+      background: '#010101',
+      fontSize: '16',
+      inkMode: 'translucent',
+      coverage: '50.00000001',
+    });
+    expect(errors).toEqual({});
+    expect(coveragePercent).toBe(50.00000001);
+    const r = verifyContrast({
+      foreground: '#000000',
+      background: '#010101',
+      fontSizePx: 16,
+      weight: 'normal',
+      coveragePercent,
+    });
+    expect(r.effectiveForeground).toBe('#000000');
+  });
+
   it('覆盖率 1 时结果与前景逐通道相等（与原不透明算法等价）', () => {
     const fg = { r: 18, g: 52, b: 86 };
     expect(blendChannels(fg, { r: 255, g: 255, b: 255 }, 1)).toEqual(fg);

@@ -70,15 +70,18 @@ export function contrastRatio(a: RgbColor, b: RgbColor): number {
 }
 
 /**
- * 按“四舍五入”把混合后的通道取整为 0–255 整数：
- * 0.5 恒向上取（如 31.5 → 32）。浮点运算可能把本应恰为 .5 的值
- * 算成 31.499999999999996（如 45 × 0.7），先补偿一个极小容差再取整，
- * 避免因此少取一档。容差 1e-9 远大于浮点舍入误差（约 1e-14），
- * 又远小于合法输入的最小步长（百分数至多三位小数时，混合值步长 ≈ 2.5e-3）。
+ * 按“四舍五入”把混合后的通道取整为 0–255 整数：0.5 恒向上取（如 31.5 → 32）。
+ * 浮点运算可能把本应恰为 .5 的值算偏（如 45 × 0.7 = 31.499999999999996，
+ * 恰偏低 1 个 ULP），朴素 Math.round 会因此少取一档，故先补偿一个极小误差。
+ * 容差必须随数值量级（ULP）缩放：用固定绝对容差（如 1e-9）会在高精度覆盖率下
+ * 误伤真实略低于 .5 的值——例如黑签落在 #010101 墙上、覆盖率 50.00000001% 时
+ * 混合值为 0.4999999999（本应舍为 0），加固定 1e-9 会被错误顶到 1（提亮一档）。
+ * 2 ULP 仅吸收几单位末位误差（0.5 附近约 1e-16、255 附近约 6e-14），
+ * 远小于任何可解析输入与 .5 边界的真实差值。
  */
-const CHANNEL_ROUND_EPSILON = 1e-9;
 function roundChannel(value: number): number {
-  return Math.round(value + CHANNEL_ROUND_EPSILON);
+  const roundingSlack = 2 * Number.EPSILON * Math.max(1, Math.abs(value));
+  return Math.round(value + roundingSlack);
 }
 
 /**

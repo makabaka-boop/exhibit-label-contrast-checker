@@ -117,6 +117,29 @@ test.describe('半透明文字着色核验', () => {
     await expect(page.getByTestId('preview')).toHaveCSS('background-color', 'rgb(45, 45, 45)');
   });
 
+  test('黑签叠加一级深灰墙（#010101）并填高精度覆盖率：真实低于 .5 的混合值不被错误提亮一档', async ({ page }) => {
+    await page.goto('/');
+
+    await page.getByTestId('ink-mode-translucent').check();
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#000000');
+    await page.getByLabel('背景色 (#RRGGBB)').fill('#010101');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    // 剩余比例 0.4999999999 < 0.5：有效前景应舍为 #000000，而非提亮一档的 #010101
+    await page.getByLabel('覆盖率（%，大于 0 且不超过 100）').fill('50.00000001');
+    await page.getByRole('button', { name: '核验' }).click();
+
+    await expect(page.getByTestId('result-card')).toBeVisible();
+    await expect(page.getByTestId('result-effective-foreground')).toHaveText('#000000');
+    await expect(page.getByTestId('preview')).toHaveCSS('color', 'rgb(0, 0, 0)');
+    await expect(page.getByTestId('preview')).toHaveCSS('background-color', 'rgb(1, 1, 1)');
+
+    // 对称地，剩余比例略大于 .5（覆盖率 49.999999999%）时应上舍为 #010101
+    await page.getByLabel('覆盖率（%，大于 0 且不超过 100）').fill('49.999999999');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(page.getByTestId('result-effective-foreground')).toHaveText('#010101');
+    await expect(page.getByTestId('preview')).toHaveCSS('color', 'rgb(1, 1, 1)');
+  });
+
   test('非法覆盖率在字段旁说明原因，旧结果与取色区状态不被改写', async ({ page }) => {
     await page.goto('/');
 
