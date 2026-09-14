@@ -2,6 +2,16 @@
 
 送印前核验展签配色的纯浏览器工具：TypeScript + React + Vite，无任何外部在线调用，无占位计算。
 
+另附独立的**行长预检工作台**（`/precheck.html`）：定稿前预检长标题能否装入既定展签版心，拥有自己的文案草稿、测量结果与最近一次有效记录，不依赖对比度表单或正式核验结果。
+
+## 行长预检工作台
+
+- **输入**：标题文案（可含显式换行）、可用宽度（CSS px）、字号（CSS px）、字重（普通/粗体）与最大行数（正整数）。
+- **排版**：领域服务 `src/lib/linebreak.ts` 接收排版请求与字符宽度适配器，保留显式换行（每个显式行独立排版），优先在空格处断行（连续空白折叠为一个空格），排不下的连续文本按 Unicode 字符（码点）贪心切分，单字仍超宽时独占一行。浏览器适配层 `src/lib/canvasMeasure.ts` 只负责调用 Canvas `measureText` 测量，字体串与结果区逐行预览一致。
+- **结论**：逐行排版（含每行实测宽度）、最长行宽、排版行数及是否超出行数上限。任一输入变化都会让旧结论回到待测状态，需重新预检。
+- **容错**：空文案、非正宽度、非正字号或无效行数在字段旁就地说明，并保留最近一次有效记录；Canvas 不可用时展示测量失败，不写入存储。
+- **持久化**：每次合法预检的记录（草稿原值 + 排版结果）写入 localStorage，刷新工作台后恢复草稿与结论，可继续修改；记录损坏或存储不可用时按无记录处理。
+
 ## 核验规则
 
 - **输入**：前景色与背景色仅接受 `#RRGGBB` 六位十六进制；字号为大于 0 的 CSS 像素数；字重为普通或粗体。
@@ -26,9 +36,9 @@
 
 ```bash
 npm install
-npm run dev        # 开发服务器
-npm run test:unit  # Vitest：公式、分类、阈值边界、通道转换、区域平均与边缘裁剪
-npm run test:e2e   # Playwright：合法输入、错误保留、摘要复制、单点/区域平均取色（自动构建并预览）
+npm run dev        # 开发服务器（/ 为核验台，/precheck.html 为行长预检工作台）
+npm run test:unit  # Vitest：公式、分类、阈值边界、通道转换、区域平均与边缘裁剪、排版断行契约
+npm run test:e2e   # Playwright：合法输入、错误保留、摘要复制、单点/区域平均取色、行长预检全流程（自动构建并预览）
 npm run verify     # 单元 + 端到端完整验收
 ```
 
@@ -52,13 +62,20 @@ docker compose up --exit-code-from verify verify
 ```
 src/lib/contrast.ts    # 纯函数：解析、线性化、亮度、对比度、分类、裁决、半透明通道混合、摘要
 src/lib/sample.ts      # 纯函数：像素通道转十六进制、缩放点击坐标换算、3×3 区域平均
+src/lib/linebreak.ts   # 纯函数：行长预检排版领域服务（断行契约、显式换行、按码点切分）与草稿校验
+src/lib/canvasMeasure.ts # 浏览器适配层：仅调用 Canvas measureText 的字符宽度适配器
+src/lib/precheckStorage.ts # 最近一次有效记录的 localStorage 读写与防御性解析
 src/components/ColorPicker.tsx # 本地图片选择、单点/区域平均档位与取色画布（仅 DOM/画布交互）
 src/App.tsx            # 表单（含着色方式与覆盖率）、就地报错、取色区、结果卡、复制摘要
+src/precheck/PrecheckApp.tsx # 行长预检工作台：草稿、待测/结论切换、最近一次有效记录
+src/precheck/main.tsx  # 预检工作台入口（/precheck.html）
 tests/contrast.test.ts # Vitest 单元测试（对比度领域，含覆盖率校验与通道混合舍入）
 tests/sample.test.ts   # Vitest 单元测试（通道转换、缩放坐标边界、区域平均/裁剪/舍入）
+tests/linebreak.test.ts # Vitest 单元测试（断行契约、显式换行、超长连续文本、草稿校验）
 e2e/app.spec.ts        # Playwright：合法输入、错误保留、摘要复制
 e2e/picker.spec.ts     # Playwright：上传、单点/区域平均取色、核验主流程及失败后原值保留
 e2e/translucent.spec.ts # Playwright：取色后半透明核验、非法覆盖率保留旧结果、默认不透明一致性
+e2e/precheck.spec.ts   # Playwright：完成预检、编辑后失效、非法提交保留记录、刷新恢复、Canvas 不可用
 e2e/helpers/png.ts     # E2E 用最小 PNG 编码器（内存合成色块图）
 scripts/wait-for-web.mjs # verify 容器等待 web 就绪
 ```

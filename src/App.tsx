@@ -94,6 +94,9 @@ export default function App() {
       <p className="lede">
         送印前以相对亮度公式核验前景/背景配色。裁决使用未舍入对比度，等于阈值即通过；展示值四舍五入到两位。
       </p>
+      <p className="nav">
+        <a href="/precheck.html">前往独立的行长预检工作台 →</a>
+      </p>
 
       <div className="workspace">
         <form className="panel" onSubmit={handleSubmit} noValidate>
