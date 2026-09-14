@@ -275,10 +275,16 @@ describe('validateInputs：半透明覆盖率校验', () => {
       ['abc', /纯数字/],
       ['1e2', /纯数字/],
       ['0x32', /纯数字/],
-      ['Infinity', /纯数字/],
       ['NaN', /纯数字/],
+      // Infinity 不是“带单位/非数字”，而是非有限数值
+      ['Infinity', /有限数值/],
+      ['infinity', /有限数值/],
+      ['-Infinity', /有限数值/],
+      ['+Infinity', /有限数值/],
       ['0', /大于 0 且不超过 100/],
-      ['-5', /纯数字/],
+      // 负覆盖率是有限数字，错误原因是超出允许范围而非“不是纯数字”
+      ['-5', /超出允许范围/],
+      ['-0.01', /超出允许范围/],
       ['100.01', /大于 0 且不超过 100/],
       ['101', /大于 0 且不超过 100/],
     ];
@@ -328,6 +334,26 @@ describe('blendChannels：逐通道“前景×覆盖率 + 背景×剩余比例�
     const blended = blendChannels({ r: 0, g: 100, b: 255 }, { r: 255, g: 200, b: 0 }, 0.3);
     expect(blended).toEqual({ r: 179, g: 170, b: 77 });
     expect(rgbColorToHex(blended)).toBe('#B3AA4D');
+  });
+
+  it('黑字 30% 覆盖率落在 45 级深灰（#2D2D2D）墙上：各通道 45×0.7=31.5 向上舍入为 32（#202020）', () => {
+    // 回归：浮点把 45×0.7 算成 31.499999999999996，朴素 Math.round 会少一档得到 31（#1F1F1F）。
+    const wall = { r: 45, g: 45, b: 45 };
+    const blended = blendChannels({ r: 0, g: 0, b: 0 }, wall, 0.3);
+    expect(blended).toEqual({ r: 32, g: 32, b: 32 });
+    expect(rgbColorToHex(blended)).toBe('#202020');
+  });
+
+  it('黑字 30% 覆盖率经 verifyContrast 链路得到有效前景色 #202020', () => {
+    const r = verifyContrast({
+      foreground: '#000000',
+      background: '#2D2D2D',
+      fontSizePx: 16,
+      weight: 'normal',
+      coveragePercent: 30,
+    });
+    expect(r.coveragePercent).toBe(30);
+    expect(r.effectiveForeground).toBe('#202020');
   });
 
   it('覆盖率 1 时结果与前景逐通道相等（与原不透明算法等价）', () => {

@@ -20,8 +20,15 @@ export const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
 /** 仅接受普通十进制数字（整数或小数），拒绝 16px、1e3、0x10、Infinity 等写法。 */
 export const FONT_SIZE_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
 
-/** 覆盖率与字号同口径：只接受普通十进制数字，拒绝 50%、1e2、Infinity 等写法。 */
-export const COVERAGE_PATTERN = /^(?:\d+(?:\.\d+)?|\.\d+)$/;
+/**
+ * 覆盖率的纯数字写法（与字号同口径，但允许前导负号）：
+ * 接受 50、0.5、.5、-5 等十进制数字；负数写法本身合法，
+ * 由后续范围检查判为“超出允许范围”；拒绝 50%、1e2、Infinity 等写法。
+ */
+export const COVERAGE_PATTERN = /^-?(?:\d+(?:\.\d+)?|\.\d+)$/;
+
+/** Infinity / -Infinity（大小写不限）属于数值但不是有限数值，需单独识别。 */
+const NON_FINITE_COVERAGE_PATTERN = /^[+-]?infinity$/i;
 
 export function parseHexColor(input: string): RgbColor | null {
   if (!HEX_COLOR_PATTERN.test(input)) {
@@ -63,6 +70,18 @@ export function contrastRatio(a: RgbColor, b: RgbColor): number {
 }
 
 /**
+ * 按“四舍五入”把混合后的通道取整为 0–255 整数：
+ * 0.5 恒向上取（如 31.5 → 32）。浮点运算可能把本应恰为 .5 的值
+ * 算成 31.499999999999996（如 45 × 0.7），先补偿一个极小容差再取整，
+ * 避免因此少取一档。容差 1e-9 远大于浮点舍入误差（约 1e-14），
+ * 又远小于合法输入的最小步长（百分数至多三位小数时，混合值步长 ≈ 2.5e-3）。
+ */
+const CHANNEL_ROUND_EPSILON = 1e-9;
+function roundChannel(value: number): number {
+  return Math.round(value + CHANNEL_ROUND_EPSILON);
+}
+
+/**
  * 半透明文字的有效颜色：每个 sRGB 通道分别执行
  * “前景 × 覆盖率 + 背景 × 剩余比例”并四舍五入为 0–255 整数。
  * coverage 为 0–1 的小数（调用方保证在 (0, 1] 内）；
@@ -71,9 +90,9 @@ export function contrastRatio(a: RgbColor, b: RgbColor): number {
 export function blendChannels(foreground: RgbColor, background: RgbColor, coverage: number): RgbColor {
   const remaining = 1 - coverage;
   return {
-    r: Math.round(foreground.r * coverage + background.r * remaining),
-    g: Math.round(foreground.g * coverage + background.g * remaining),
-    b: Math.round(foreground.b * coverage + background.b * remaining),
+    r: roundChannel(foreground.r * coverage + background.r * remaining),
+    g: roundChannel(foreground.g * coverage + background.g * remaining),
+    b: roundChannel(foreground.b * coverage + background.b * remaining),
   };
 }
 
@@ -182,8 +201,9 @@ export interface ValidationOutcome {
 
 /**
  * 表单校验：任一字段非法时给出对应错误，调用方据此保留上一份有效结果。
- * 仅当 inkMode 为半透明时才校验覆盖率：为空、含单位或非有限数、
- * 不大于 0 或超过 100 时分别在覆盖率字段旁说明原因；不透明时覆盖率输入不参与校验。
+ * 仅当 inkMode 为半透明时才校验覆盖率：为空、含单位等非数字写法、
+ * Infinity 等非有限数值、负数/零/超过 100 等超出范围的值，分别在覆盖率
+ * 字段旁说明原因；不透明时覆盖率输入不参与校验。
  */
 export function validateInputs(input: {
   foreground: string;
@@ -212,15 +232,19 @@ export function validateInputs(input: {
     const raw = (input.coverage ?? '').trim();
     if (raw === '') {
       errors.coverage = '半透明着色必须填写覆盖率（大于 0 且不超过 100 的百分数）';
+    } else if (NON_FINITE_COVERAGE_PATTERN.test(raw)) {
+      // Infinity / -Infinity 是数值写法但不是有限数值，与“带单位/非数字”区分开。
+      errors.coverage = '覆盖率必须是有限数值（不能为 Infinity 等无穷大）';
     } else if (!COVERAGE_PATTERN.test(raw)) {
       // 含 % 等单位、科学计数法、十六进制或非数字写法都归为此类。
       errors.coverage = '覆盖率必须是纯数字，不要带 % 等单位';
     } else {
       const value = Number(raw);
       if (!Number.isFinite(value)) {
-        errors.coverage = '覆盖率必须是有限数字';
+        errors.coverage = '覆盖率必须是有限数值（不能为 Infinity 等无穷大）';
       } else if (value <= 0 || value > 100) {
-        errors.coverage = '覆盖率必须大于 0 且不超过 100';
+        // 负覆盖率是有限数字，问题在于超出允许范围，而不是格式非法。
+        errors.coverage = '覆盖率必须大于 0 且不超过 100（当前值超出允许范围）';
       } else {
         coveragePercent = value;
       }

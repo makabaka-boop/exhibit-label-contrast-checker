@@ -99,6 +99,24 @@ test.describe('半透明文字着色核验', () => {
     );
   });
 
+  test('黑签 30% 覆盖在 45 级深灰墙上：浮点误差下三个通道仍向上舍入为 #202020', async ({ page }) => {
+    await page.goto('/');
+
+    await page.getByTestId('ink-mode-translucent').check();
+    await page.getByLabel('前景色 (#RRGGBB)').fill('#000000');
+    await page.getByLabel('背景色 (#RRGGBB)').fill('#2D2D2D');
+    await page.getByLabel('字号 (CSS px)').fill('16');
+    await page.getByLabel('覆盖率（%，大于 0 且不超过 100）').fill('30');
+    await page.getByRole('button', { name: '核验' }).click();
+
+    // 45×0.7 在浮点下为 31.499999999999996，但 31.5 应向上舍入为 32，而非少一档的 31
+    await expect(page.getByTestId('result-card')).toBeVisible();
+    await expect(page.getByTestId('result-ink')).toHaveText('半透明（覆盖率 30%）');
+    await expect(page.getByTestId('result-effective-foreground')).toHaveText('#202020');
+    await expect(page.getByTestId('preview')).toHaveCSS('color', 'rgb(32, 32, 32)');
+    await expect(page.getByTestId('preview')).toHaveCSS('background-color', 'rgb(45, 45, 45)');
+  });
+
   test('非法覆盖率在字段旁说明原因，旧结果与取色区状态不被改写', async ({ page }) => {
     await page.goto('/');
 
@@ -144,6 +162,18 @@ test.describe('半透明文字着色核验', () => {
     await coverage.fill('101');
     await page.getByRole('button', { name: '核验' }).click();
     await expect(errorCoverage).toContainText('大于 0 且不超过 100');
+
+    // 负覆盖率是有限数字：报“超出允许范围”，而不是误报为“不是纯数字/带单位”
+    await coverage.fill('-5');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(errorCoverage).toContainText('超出允许范围');
+    await expect(errorCoverage).not.toContainText('纯数字');
+
+    // Infinity：明确指出不是有限数值，而不是错误声称输入带单位
+    await coverage.fill('Infinity');
+    await page.getByRole('button', { name: '核验' }).click();
+    await expect(errorCoverage).toContainText('有限数值');
+    await expect(errorCoverage).not.toContainText('单位');
 
     // 整个过程中旧结果与取色区状态均未被改写
     await expect(page.getByTestId('result-card')).toBeVisible();
